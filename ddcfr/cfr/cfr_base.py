@@ -73,28 +73,28 @@ class SolverBase:
         self.np = self.game.num_players()
         self.max_num_actions = self.game.num_distinct_actions()
         self.game_name = self.game_config.name
+        
+        print(f"[{self.game_name}] Initializing states... This may take a while for large games.")
         self._init_states(self.game.new_initial_state())
+        print(f"[{self.game_name}] Initialization complete. Found {len(self.states)} information sets.")
 
         self.conv_history = []
         self.num_nodes_touched = 0
         self.num_iterations = 0
         self.last_num_nodes_touched = 0
 
-
     def _init_states(self, h: pyspiel.State):
         """
         修正后的状态初始化方法。
-        它会为博弈树中的每一个节点，都尝试为每一个玩家创建信息集。
-        这确保了所有可能的信息集都被覆盖。
+        只为当前需要行动的玩家创建信息集，避免重复计数。
         """
         if h.is_terminal():
             return
-        
-        # 对于当前节点h，为所有玩家创建信息集状态
-        # _lookup_state内部会检查是否已存在，所以不会重复创建
-        for player in range(self.np):
+            
+        if h.is_player_node():
+            player = h.current_player()
             self._lookup_state(h, player)
-
+        
         # 递归遍历子节点
         if h.is_chance_node():
             for a, _ in h.chance_outcomes():
@@ -103,13 +103,11 @@ class SolverBase:
             for a in h.legal_actions():
                 self._init_states(h.child(a))
 
-
     def _lookup_state(self, h: pyspiel.State, player: int):
-        # 只有玩家节点才有对该玩家有意义的信息集
         if not h.is_player_node():
             return None
         feature = h.information_state_string(player)
-        if not feature: # 忽略空的info state string
+        if not feature:
             return None
             
         feature = self._add_player_info_in_feature(feature, player)
@@ -126,10 +124,34 @@ class SolverBase:
 
     def learn(
         self,
-        #... (此方法保持不变) ...
+        total_iterations: Optional[int] = None,
+        total_nodes_touched: Optional[int] = None,
+        eval_nodes_interval: Optional[int] = None,
+        eval_iterations_interval: Optional[int] = None,
     ):
-        # ... (此方法保持不变) ...
-        pass
+        if total_iterations:
+            for self.num_iterations in range(0, total_iterations + 1):
+                while (
+                    self.num_nodes_touched
+                    < self.game_config.num_nodes * 2 * self.num_iterations
+                ):
+                    self.iteration()
+                self.after_iteration(
+                    xlabel="iterations",
+                    eval_nodes_interval=eval_nodes_interval,
+                    eval_iterations_interval=eval_iterations_interval,
+                )
+        elif total_nodes_touched:
+            for self.num_iterations in count(start=0, step=1):
+                if self.num_iterations > 0:
+                    self.iteration()
+                self.after_iteration(
+                    xlabel="nodes",
+                    eval_nodes_interval=eval_nodes_interval,
+                    eval_iterations_interval=eval_iterations_interval,
+                )
+                if self.num_nodes_touched >= total_nodes_touched:
+                    break
 
     def iteration(self):
         raise NotImplementedError
@@ -180,9 +202,8 @@ class SolverBase:
 
     def average_policy(self):
         def wrap(h):
-            # 只有玩家节点需要策略
             if not h.is_player_node():
-                return {} # 或者返回一个空字典
+                return {}
             
             player = h.current_player()
             feature = h.information_state_string(player)
@@ -190,8 +211,6 @@ class SolverBase:
             s = self.states.get(feature)
             
             if s is None:
-                # 如果因为某种原因状态仍未找到，返回均匀策略
-                # 这是最后的保险措施
                 return {a: 1.0/len(h.legal_actions()) for a in h.legal_actions()}
             return s.get_average_policy()
 
