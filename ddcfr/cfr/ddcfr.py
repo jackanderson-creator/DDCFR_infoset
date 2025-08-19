@@ -95,11 +95,18 @@ class DDCFRSolver(DCFRSolver):
         if self.start_log_conv is None or self.last_log_conv is None: self.reset_for_new_run()
         iters_norm = self.num_iterations / self.total_iterations
         conv_range = self.start_log_conv - (-12)
-        conv_frac = (self.last_log_conv - (-12)) / (conv_range + 1e-8)
+        conv_frac = (self.last_log_conv - (-12)) / (conv_range + 1e-12)
         states_features = []
         for s in self.ordered_states:
             regrets = list(s.regrets.values())
-            max_regret, min_regret = (np.max(regrets), np.min(regrets)) if regrets else (0.0, 0.0)
+            if regrets:
+                m=np.mean(regrets)
+                v=np.var(regrets)
+                #对遗憾进行归一化！！！！！！！！！！！！！！！！！！！
+                regrets=(regrets-m)/(np.sqrt(v)+1e-12)
+                max_regret, min_regret = (np.max(regrets), np.min(regrets)) 
+            else:
+                max_regret, min_regret = (0.0, 0.0)
             states_features.append((iters_norm, conv_frac, max_regret, min_regret))
         return np.nan_to_num(np.array(states_features, dtype=np.float64))
 
@@ -119,7 +126,13 @@ class DDCFRSolver(DCFRSolver):
         self.after_iteration("iterations", eval_iterations_interval=1, dump_log=False)
         
         new_log_conv = np.log(self.conv_history[-1]) / np.log(10)
-        global_reward = self.last_log_conv - new_log_conv
+        # global_reward = self.last_log_conv - new_log_conv
+        
+
+        #对奖励进行归一化！！！！！！！！！！！！！！！！！！！！！
+        conv_range = self.start_log_conv - (-12)
+        global_reward = (self.last_log_conv - new_log_conv) / (conv_range + 1e-12)
+
         self.last_log_conv = new_log_conv
         
         # ==================== 代码修改部分 START ====================
