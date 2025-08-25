@@ -59,7 +59,6 @@ class DDCFRSolver(DCFRSolver):
         }
 
     def reset_for_new_run(self):
-        # **修改点**: 移除错误的super()调用，替换为正确的重置逻辑
         self.states = {}
         self._init_states(self.game.new_initial_state())
         self.ordered_states = list(self.states.values())
@@ -98,16 +97,20 @@ class DDCFRSolver(DCFRSolver):
         conv_frac = (self.last_log_conv - (-12)) / (conv_range + 1e-12)
         states_features = []
         for s in self.ordered_states:
-            regrets = list(s.regrets.values())
-            if regrets:
-                m=np.mean(regrets)
-                v=np.var(regrets)
-                #对遗憾进行归一化！！！！！！！！！！！！！！！！！！！
-                regrets=(regrets-m)/(np.sqrt(v)+1e-12)
-                max_regret, min_regret = (np.max(regrets), np.min(regrets)) 
-            else:
-                max_regret, min_regret = (0.0, 0.0)
-            states_features.append((iters_norm, conv_frac, max_regret, min_regret))
+            # regrets = list(s.regrets.values())
+            #对遗憾进行尺度放缩！！！！！！！！！！！！！！！！！！！
+            # if regrets:
+            #     max_regret, min_regret = (np.max(regrets), np.min(regrets)) 
+            #     if max_regret!=0:
+            #         max_regret=np.sign(max_regret)*(np.log(np.abs(max_regret)*1e20)/np.log(10))
+            #     if min_regret!=0:
+            #         min_regret=np.sign(min_regret)*(np.log(np.abs(min_regret)*1e20)/np.log(10))
+            #     max_regret=max_regret/10.0
+            #     min_regret=min_regret/10.0
+            # else:
+            #     max_regret, min_regret = (0.0, 0.0)
+
+            states_features.append((iters_norm, conv_frac))
         return np.nan_to_num(np.array(states_features, dtype=np.float64))
 
     def run_one_cfr_iteration(self, alphas, betas, gammas):
