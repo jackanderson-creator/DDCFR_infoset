@@ -25,11 +25,12 @@ class PPO_Worker:
         logger: Logger,
         seed: int,
         worker_id: int,
+        gpu_id: int, 
         log_path: str,
         experiment_id: int,
         # learning_rate: float, # 新增，为worker的本地优化器提供学习率
-        n_steps: int = 256,
-        batch_size: int = 256,
+        n_steps: int = 500,
+        batch_size: int = 500,
         n_epochs: int = 10,
         gamma: float = 0.99,
         gae_lambda: float = 1.0,
@@ -44,12 +45,23 @@ class PPO_Worker:
         self.logger = logger
         set_seed(seed)
 
+        # if th.cuda.is_available():
+        #     self.device = th.device("cuda:0")
+        #     # self.logger.info(f"Worker {self.worker_id} 分配到 GPU: {th.cuda.get_device_name(0)}")
+        # else:
+        #     self.device = th.device("cpu")
+        #     # self.logger.info(f"Worker {self.worker_id} 使用 CPU")
+
+
+        # 使用传入的 gpu_id 来设置设备
         if th.cuda.is_available():
-            self.device = th.device("cuda:0")
-            # self.logger.info(f"Worker {self.worker_id} 分配到 GPU: {th.cuda.get_device_name(0)}")
+            self.device = th.device(f"cuda:{gpu_id}")
+            self.logger.info(f"Worker {self.worker_id} 分配到 GPU: {gpu_id}")
         else:
             self.device = th.device("cpu")
-            # self.logger.info(f"Worker {self.worker_id} 使用 CPU")
+            self.logger.info(f"Worker {self.worker_id} 使用 CPU")
+
+
         
         self.solver = DDCFRSolver(game_config, self.logger)
         
@@ -68,6 +80,7 @@ class PPO_Worker:
         self.normalize_advantage = normalize_advantage
         self.clip_range = clip_range
         self.final_exploitability=0.0
+        # self.count=0
 
         #使用主进程传来的学习率
         self.policy = A2CPolicy(self.obs_dim, self.action_dim, self.device, learning_rate=0)
@@ -89,14 +102,17 @@ class PPO_Worker:
         #     latest_exploitability=self.solver.conv_history[499] if self.solver.conv_history else 0.0
         # latest_exploitability = self.solver.conv_history[-1] if self.solver.conv_history else 0.0
         game_name = self.solver.game_name
-        num_timesteps = self.num_infosets * self.n_steps
+        # num_timesteps = self.num_infosets * self.n_steps
+        num_timesteps = self.n_steps
         final_exploitability =self.final_exploitability
 
         return self.rollout_buffer,num_timesteps, game_name, final_exploitability, self.worker_id
 
     def collect_rollouts_custom(self):
+        
         self.rollout_buffer.reset()
         for _ in range(self.n_steps):
+            # self.count+=1
             obs = self.solver.get_all_infoset_states_for_ppo()
             with th.no_grad():
                 actions_tensor, values_tensor, log_probs_tensor = self.policy.predict_tensors(obs)
@@ -104,6 +120,24 @@ class PPO_Worker:
             actions = actions_tensor.cpu().numpy()
             values = values_tensor.cpu().numpy().flatten()
             log_probs = log_probs_tensor.cpu().numpy()
+
+            #所有的infosets都采用第一个infoset的动作
+            # print(f"{self.solver.game_name}游戏的三个数组大小{actions.shape}---{values.shape}---{log_probs.shape}")
+
+            if actions.shape[0] > 0:
+                    # if self.count<=2:
+                    #     print(f"修改之前的动作{actions}")
+                    # 获取第一个信息集的动作、价值和概率
+                    first_action = actions[0]
+                    first_value = values[0]
+                    first_log_prob = log_probs[0]
+
+                    # 将第一个信息集的值赋给所有信息集
+                    actions[:] = first_action
+                    values[:] = first_value
+                    log_probs[:] = first_log_prob
+                    # if self.count<=2:
+                    #     print(f"修改之后的动作{actions}")
 
             reward, done = self.solver.run_one_ppo_step(actions)
             
@@ -121,7 +155,7 @@ class PPO_Worker:
                 if start_slice >= 0:
                     self.rollout_buffer.next_values[start_slice:end_slice] = 0.0
 
-        self.rollout_buffer.compute_returns_and_advantage()
+        self.rollout_buffer.compute_returns_and_advantage(self.num_infosets, self.n_steps)
 
 
 
@@ -207,12 +241,32 @@ class RolloutBuffer:
         self.pos = end_pos
         if self.pos >= self.buffer_size: self.full = True
 
-    def compute_returns_and_advantage(self):
-        last_gae = 0
-        for step in reversed(range(self.pos)):
-            delta = self.rewards[step] + self.gamma * self.next_values[step] * (1 - self.dones[step]) - self.values[step]
-            last_gae = delta + self.gamma * self.gae_lambda * (1 - self.dones[step]) * last_gae
-            self.advs[step] = last_gae
+    # def compute_returns_and_advantage(self):
+    #     last_gae = 0
+    #     for step in reversed(range(self.pos)):
+    #         delta = self.rewards[step] + self.gamma * self.next_values[step] * (1 - self.dones[step]) - self.values[step]
+    #         last_gae = delta + self.gamma * self.gae_lambda * (1 - self.dones[step]) * last_gae
+    #         self.advs[step] = last_gae
+    #     self.rets[:self.pos] = self.advs[:self.pos] + self.values[:self.pos]
+        
+    def compute_returns_and_advantage(self, num_infosets: int, n_steps: int):
+        if num_infosets == 0:
+            return
+        steps_done = self.pos // num_infosets
+        if steps_done == 0:
+            return
+
+        # 遍历每一个信息集
+        for i in range(num_infosets):
+            last_gae = 0
+            # 遍历信息集的轨迹
+            for t in reversed(range(steps_done)):
+                idx = t * num_infosets + i
+                
+                delta = self.rewards[idx] + self.gamma * self.next_values[idx] * (1 - self.dones[idx]) - self.values[idx]
+                last_gae = delta + self.gamma * self.gae_lambda * (1 - self.dones[idx]) * last_gae
+                self.advs[idx] = last_gae
+        
         self.rets[:self.pos] = self.advs[:self.pos] + self.values[:self.pos]
 
     def get(self, batch_size: int):
