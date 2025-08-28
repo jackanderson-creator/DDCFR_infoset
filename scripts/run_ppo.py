@@ -26,10 +26,10 @@ def default_config():
     learning_rate = 1e-3
     n_steps = 500
     n_epochs = 10
-    total_iterations = 10000
-    num_cpu_workers = 4
+    total_iterations = 5000
+    num_cpu_workers = 20
     num_train_games = 4
-    batch_size = 256
+    batch_size = 500
     gamma = 0.99
     gae_lambda = 1.0
     ent_coef = 0.0
@@ -108,7 +108,7 @@ def train_on_master(policy, all_rollout_buffers, n_epochs, batch_size, n_steps, 
 
     # 创建列表，用于存放从每个buffer中提取出的、只属于第一个信息集的数据
     infoset0_obs, infoset0_actions, infoset0_old_values, infoset0_old_log_probs, infoset0_advantages, infoset0_returns = [], [], [], [], [], []
-
+    # i=1
     for buf in all_rollout_buffers:
         if buf.pos == 0: continue
         
@@ -116,6 +116,7 @@ def train_on_master(policy, all_rollout_buffers, n_epochs, batch_size, n_steps, 
         # 注意：这里假设buf.pos是n_steps的整数倍，这在我们的代码中是成立的
         num_infosets = buf.pos // n_steps
         if num_infosets == 0: continue
+
 
         # 使用切片技术 [0::num_infosets] 来提取属于第一个信息集的数据
         # 它的意思是：从索引0开始，每隔 num_infosets 个位置取一个元素
@@ -125,7 +126,8 @@ def train_on_master(policy, all_rollout_buffers, n_epochs, batch_size, n_steps, 
         infoset0_old_log_probs.append(buf.log_probs[:buf.pos][0::num_infosets])
         infoset0_advantages.append(buf.advs[:buf.pos][0::num_infosets])
         infoset0_returns.append(buf.rets[:buf.pos][0::num_infosets])
-
+        # print(f"第{i}个游戏的buffer中取出的obs的维度是{buf.obs[:buf.pos][0::num_infosets].shape}/n")
+        # i+=1
     # 如果没有收集到任何数据，则直接返回
     if not infoset0_obs:
         return {"policy_loss": 0, "value_loss": 0, "entropy_loss": 0}
@@ -138,11 +140,17 @@ def train_on_master(policy, all_rollout_buffers, n_epochs, batch_size, n_steps, 
     full_advantages = np.concatenate(infoset0_advantages)
     full_returns = np.concatenate(infoset0_returns)
     
+    # print(f"我们的obs的维度{full_obs.shape}/n")
+    # # print(f"values的维度{full_old_values.shape}/n")
+    # print(f"我们的advs的维度{full_advantages.shape}/n")
+
+
     dataset_size = full_obs.shape[0]
 
     # 初始化用于累加损失的变量
     total_policy_loss, total_value_loss, total_entropy_loss = 0.0, 0.0, 0.0
     num_batches = 0
+
 
     for epoch in range(n_epochs):
         indices = np.random.permutation(dataset_size)
@@ -249,7 +257,6 @@ def main(_run, seed, save_log, log_path, experiment_id, num_cpu_workers, num_tra
         mp.set_start_method("forkserver", force=True)
     except RuntimeError:
         pass
-
     model_save_dir = os.path.join(log_path, str(experiment_id))
     os.makedirs(model_save_dir, exist_ok=True)
     logger.info(f"模型将保存在: {model_save_dir}")
@@ -288,11 +295,14 @@ def main(_run, seed, save_log, log_path, experiment_id, num_cpu_workers, num_tra
     result_queue = mp.Queue()
     workers = []
     
+    NUM_GPUS = 6
     logger.info(f"正在启动 {num_cpu_workers} 个持久化工作进程...")
     for i in range(num_cpu_workers):
+        gpu_id = i % NUM_GPUS
         worker_configs = {
             "seed": seed + i, "worker_id": i, "log_path": log_path,
-            "experiment_id": experiment_id, "learning_rate": learning_rate, **kwargs
+            "experiment_id": experiment_id,"gpu_id": gpu_id,
+            "learning_rate": learning_rate,"n_steps":n_steps,"batch_size":batch_size, **kwargs
         }
         game_config = train_games[i % len(train_games)]
         
@@ -324,6 +334,20 @@ def main(_run, seed, save_log, log_path, experiment_id, num_cpu_workers, num_tra
             results.append(res)
             all_rollout_buffers.append(res["rollout_buffer"])
         
+
+        # j=1
+        # print(f"all_rollout_buffers的维度{len(all_rollout_buffers)}!!!!!!!!!!!!!!!!!/n")
+        # print(f"所有buffer的内容：{all_rollout_buffers}/n")
+        # for buf in all_rollout_buffers:
+        #     d= np.array(buf.obs)
+        #     print(f"all_rollout_buffers的第{j}个obs维度{d.shape}!!!!!!!!!!!!!!!!!/n")
+        #     j+=1
+
+
+
+
+
+
         if not results:
             logger.error("所有工作进程都返回了错误，训练终止。"); break
 
@@ -350,7 +374,7 @@ def main(_run, seed, save_log, log_path, experiment_id, num_cpu_workers, num_tra
         logger.record("loss/value_loss", avg_losses["value_loss"])
         logger.record("loss/entropy_loss", avg_losses["entropy_loss"])
         
-        logger.dump(step=iteration)
+        logger.dump(step=total_timesteps)
 
         # 保存模型
         if iteration % save_interval == 0:
