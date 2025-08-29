@@ -73,43 +73,25 @@ class SolverBase:
         self.np = self.game.num_players()
         self.max_num_actions = self.game.num_distinct_actions()
         self.game_name = self.game_config.name
-        
-        print(f"[{self.game_name}] Initializing states... This may take a while for large games.")
         self._init_states(self.game.new_initial_state())
-        print(f"[{self.game_name}] Initialization complete. Found {len(self.states)} information sets.")
 
         self.conv_history = []
         self.num_nodes_touched = 0
         self.num_iterations = 0
-        self.last_num_nodes_touched = 0
 
     def _init_states(self, h: pyspiel.State):
-        """
-        修正后的状态初始化方法。
-        只为当前需要行动的玩家创建信息集，避免重复计数。
-        """
         if h.is_terminal():
             return
-            
-        if h.is_player_node():
-            player = h.current_player()
-            self._lookup_state(h, player)
-        
-        # 递归遍历子节点
         if h.is_chance_node():
-            for a, _ in h.chance_outcomes():
-                self._init_states(h.child(a))
-        else: # 如果是玩家节点
             for a in h.legal_actions():
                 self._init_states(h.child(a))
+            return
+        self._lookup_state(h, h.current_player())
+        for a in h.legal_actions():
+            self._init_states(h.child(a))
 
     def _lookup_state(self, h: pyspiel.State, player: int):
-        if not h.is_player_node():
-            return None
         feature = h.information_state_string(player)
-        if not feature:
-            return None
-            
         feature = self._add_player_info_in_feature(feature, player)
         if self.states.get(feature) is None:
             self.states[feature] = self._init_state(h)
@@ -154,14 +136,13 @@ class SolverBase:
                     break
 
     def iteration(self):
-        raise NotImplementedError
+        return NotImplemented
 
     def after_iteration(
         self,
         xlabel: str,
         eval_nodes_interval: Optional[int] = None,
         eval_iterations_interval: Optional[int] = None,
-        dump_log: bool = True,
     ):
         if self.num_iterations > 0:
             if (
@@ -180,19 +161,14 @@ class SolverBase:
         self.logger.record(f"{self.game_name}/conv", conv)
         self.logger.record(f"{self.game_name}/iters", self.num_iterations)
         self.logger.record(f"{self.game_name}/nodes_touched", self.num_nodes_touched)
-
-        if dump_log:
-            if xlabel == "iterations":
-                self.logger.dump(step=self.num_iterations)
-            elif xlabel == "nodes":
-                self.logger.dump(step=self.num_nodes_touched)
-            else:
-                raise ValueError(f"xlabel should be iterations or nodes, not {xlabel}")
+        if xlabel == "iterations":
+            self.logger.dump(step=self.num_iterations)
+        elif xlabel == "nodes":
+            self.logger.dump(step=self.num_nodes_touched)
+        else:
+            raise ValueError(f"xlabel should be iterations or nodes, not {xlabel}")
 
     def calc_conv(self):
-        if not self.states:
-            return 1.0
-            
         conv = exploitability.exploitability(
             self.game,
             policy.tabular_policy_from_callable(self.game, self.average_policy()),
@@ -202,16 +178,10 @@ class SolverBase:
 
     def average_policy(self):
         def wrap(h):
-            if not h.is_player_node():
-                return {}
-            
+            feature = h.information_state_string()
             player = h.current_player()
-            feature = h.information_state_string(player)
             feature = self._add_player_info_in_feature(feature, player)
-            s = self.states.get(feature)
-            
-            if s is None:
-                return {a: 1.0/len(h.legal_actions()) for a in h.legal_actions()}
+            s = self.states[feature]
             return s.get_average_policy()
 
         return wrap

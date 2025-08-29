@@ -42,25 +42,14 @@ class DCFRState(CFRState):
 
     def cumulate_policy(self, T, gamma):
         T = float(T)
-        # 定义一个非常大的数作为裁剪上限，以防止溢出
-        CLIP_THRESHOLD = 1e20
         for a in self.regrets.keys():
             if T == 1:
                 self.cum_policy[a] = self.reach * self.policy[a]
                 continue
-            # self.cum_policy[a] = (
-            #     self.cum_policy[a] * np.power((T - 1) / T, gamma)
-            #     + self.reach * self.policy[a]
-            # )
-
-             # **修改点**: 在更新后，使用np.clip进行裁剪
-            updated_policy = (
+            self.cum_policy[a] = (
                 self.cum_policy[a] * np.power((T - 1) / T, gamma)
                 + self.reach * self.policy[a]
             )
-            # 确保累积策略值不会变成 inf
-            self.cum_policy[a] = np.clip(updated_policy, -CLIP_THRESHOLD, CLIP_THRESHOLD)
-
 
 
 class DCFRSolver(CFRSolver):
