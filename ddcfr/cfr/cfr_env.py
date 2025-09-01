@@ -39,13 +39,26 @@ class CFREnv(gym.Env):
         #     }
         # )
 
-        self.action_space=spaces.Box(low=-1, high=1, shape=(self.num_info_sets,3), dtype=np.float64)
+        # self.action_space=spaces.Box(low=-1, high=1, shape=(self.num_info_sets,3), dtype=np.float64)
 
-        # self.tau_list = [1, 2, 5, 10, 20]
+        self.action_space = spaces.Dict(
+            {
+                "abg": spaces.Box(
+                    low=-1,
+                    high=1,
+                    shape=(self.num_info_sets, 3),
+                    dtype=np.float64
+                ),
+                "tau": spaces.MultiDiscrete([5] * self.num_info_sets),
+            }
+        )
+
+        self.tau_list = [1, 2, 5, 10, 20]
         self.alpha_range = [0, 5]
         self.beta_range = [-5, 0]
         self.gamma_range = [0, 5]
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_info_sets,4), dtype=np.float64)
+        # self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_info_sets,4), dtype=np.float64)
+        self.observation_space = spaces.Box(low=-1, high=1, shape=(self.num_info_sets, 2), dtype=np.float64)
         self.action_space.seed(seed)
         self.observation_space.seed(seed)
 
@@ -64,25 +77,25 @@ class CFREnv(gym.Env):
         state=[]
         # for s in list(self.solver.states.values()):
         for s in self.solver.ordered_states:
-            min_regret=min(s.regrets)
-            max_regret = max(s.regrets)
-            state.append([iters, conv_frac,min_regret,max_regret])
+            # min_regret=min(s.regrets)
+            # max_regret = max(s.regrets)
+            state.append([iters, conv_frac])
         # state = (iters, conv_frac)
         return np.array(state, dtype=np.float64)
 
     def step(self, action):
-        #action中没有了tau
-        alpha, beta, gamma= self._unscale_action(action)
+        # action中没有了tau
+        alpha, beta, gamma,tau= self._unscale_action(action)
         #tau固定
-        tau=2
+        # tau=2
         self.logger.record(f"{self.game_name}/tau", tau)
         for _ in range(tau):
             self.solver.num_iterations += 1
             self.solver.iteration(alpha, beta, gamma)
             #暂时只记录第一个信息集上的动作
-            self.logger.record(f"{self.game_name}/alpha", alpha[0])
-            self.logger.record(f"{self.game_name}/beta", beta[0])
-            self.logger.record(f"{self.game_name}/gamma", gamma[0])
+            self.logger.record(f"{self.game_name}/alpha_infoset0", alpha[0])
+            self.logger.record(f"{self.game_name}/beta_infoset0", beta[0])
+            self.logger.record(f"{self.game_name}/gamma_infoset0", gamma[0])
             self.solver.after_iteration(
                 "iterations",
                 eval_iterations_interval=self.eval_iterations_interval,
@@ -100,19 +113,23 @@ class CFREnv(gym.Env):
         state = []
         # for s in list(self.solver.states.values()):
         for s in self.solver.ordered_states:
-            min_regret = min(s.regrets)
-            max_regret = max(s.regrets)
-            state.append([iters, conv_frac, min_regret, max_regret])
+            # min_regret=min(s.regrets)
+            # max_regret = max(s.regrets)
+            state.append([iters, conv_frac])
 
         info = {"start_log_conv": self.start_log_conv}
         return np.array(state, dtype=np.float64), reward, done, info
 
     def _unscale_action(self, action):
-        alpha, beta, gamma = action.T
+        abg=action["abg"]
+        alpha, beta, gamma = abg.T
         alpha = self.denormalize(alpha, *self.alpha_range)
         beta = self.denormalize(beta, *self.beta_range)
         gamma = self.denormalize(gamma, *self.gamma_range)
-        return alpha, beta, gamma
+        #选取第一个信息集的tau
+        tau=action["tau"][0]
+        tau = self.tau_list[tau]
+        return alpha, beta, gamma,tau
 
     def denormalize(self, param, param_min, param_max):
         param_mid = (param_max + param_min) / 2
@@ -172,7 +189,10 @@ class ConvStatistics(gym.Wrapper):
         real_conv = self.env.solver.conv_history[-1]
         assert abs(info["conv"] - real_conv) < 1e-8
         if done:
-            self.episode_returns = 0
+            # self.episode_returns = 0
+            info["terminal_observation"]=state
+            state=self.reset()
+            
         return state, reward, done, info
 
 
